@@ -19,7 +19,9 @@ if not pygame.font: print 'Warning, fonts disabled'
 try:
     import psyco
     psyco.full()
+    print 'Using psyco for speedup'
 except ImportError:
+    print 'Please install psyco for speedup'
     pass
 
 
