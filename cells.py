@@ -11,8 +11,11 @@ import random
 import sys
 import time
 
+from collections import defaultdict
+
 import numpy
 import pygame, pygame.locals
+from pygame.color import Color
 
 if not pygame.font: print 'Warning, fonts disabled'
 
@@ -35,8 +38,17 @@ def get_mind(name):
 
 TIMEOUT = None
 
-
 config = ConfigParser.RawConfigParser()
+
+
+def get_color(name):
+    c = Color(name)
+    return (c.r, c.g, c.b) # return without alpha value
+
+TEAM_COLORS = map(get_color, ['red', 'cyan', 'yellow', 'blue'])
+
+def get_team_color(team_id):
+    return TEAM_COLORS[ team_id % len(TEAM_COLORS) ]
 
 
 def get_next_move(old_x, old_y, x, y):
@@ -45,6 +57,7 @@ def get_next_move(old_x, old_y, x, y):
     dx = numpy.sign(x - old_x)
     dy = numpy.sign(y - old_y)
     return (old_x + dx, old_y + dy)
+
 
 
 class Game(object):
@@ -59,7 +72,11 @@ class Game(object):
         self.tic = time.time()
         self.terr = ScalarMapLayer(self.size)
         self.terr.set_random(5)
-        self.minds = [m[1].AgentMind for m in mind_list]
+        self.minds = [m_module.AgentMind for m_name, m_module in mind_list]
+
+        # not very OO
+        self.mind_names = dict(
+                (m_module.AgentMind, m_name) for m_name, m_module in mind_list)
 
         self.energy_map = ScalarMapLayer(self.size)
         self.energy_map.set_random(10)
@@ -69,13 +86,15 @@ class Game(object):
 
         self.agent_map = ObjectMapLayer(self.size, None)
         self.agent_population = []
+        self.agent_count = defaultdict(int)
         self.winner = None
+
         if symmetric:
             self.n_plants = 7
         else:
             self.n_plants = 14
-            
-        # Add some randomly placed plants to the map. 
+
+        # Add some randomly placed plants to the map.
         for x in xrange(self.n_plants):
             mx = random.randrange(1, self.width - 1)
             my = random.randrange(1, self.height - 1)
@@ -112,6 +131,7 @@ class Game(object):
         ''' Adds an agent to the game. '''
         self.agent_population.append(a)
         self.agent_map.set(a.x, a.y, a)
+        self.agent_count[a.mind.__class__] += 1
 
     def del_agent(self, a):
         ''' Kills the agent (if not already dead), removes them from the game and
@@ -122,6 +142,7 @@ class Game(object):
         if a.loaded:
             a.loaded = False
             self.terr.change(a.x, a.y, 1)
+        self.agent_count[a.mind] -= 1
 
     def move_agent(self, a, x, y):
         ''' Moves agent, a, to new position (x,y) unless difference in terrain levels between
@@ -165,7 +186,7 @@ class Game(object):
                 if (self.agent_map.in_range(new_x, new_y) and
                     not self.agent_map.get(new_x, new_y)):
                     self.move_agent(agent, new_x, new_y)
-                    
+
             elif action.type == ACT_SPAWN: # Creates new agents and uses additional 50 energy units.
                 act_x, act_y = action.get_data()[:2]
                 (new_x, new_y) = get_next_move(agent.x, agent.y,
@@ -178,12 +199,12 @@ class Game(object):
                               action.get_data()[2:])
                     self.add_agent(a)
                     agent.energy -= 50
-                    
+
             elif action.type == ACT_EAT: # Increases the agent's energy by removing the amount found at current location.
                 intake = self.energy_map.get(agent.x, agent.y)
                 agent.energy += intake
                 self.energy_map.change(agent.x, agent.y, -intake)
-                
+
             elif action.type == ACT_ATTACK:
                 # Attacking an adjacent agent (on any team including own) destroys that agent
                 # and adds their energy plus 25 extra in the position they previously occupied.
@@ -196,12 +217,12 @@ class Game(object):
                     energy = self.agent_map.get(new_x, new_y).energy + 25
                     self.energy_map.change(new_x, new_y, energy)
                     self.del_agent(self.agent_map.get(new_x, new_y))
-                    
+
             elif action.type == ACT_LIFT:
                 if not agent.loaded and self.terr.get(agent.x, agent.y) > 0:
                     agent.loaded = True
                     self.terr.change(agent.x, agent.y, -1)
-                    
+
             elif action.type == ACT_DROP:
                 if agent.loaded:
                     agent.loaded = False
@@ -231,15 +252,19 @@ class Game(object):
             self.winner = -1
 
     def tick(self):
-        self.disp.update(self.terr, self.agent_population,
+        self.disp.draw_terrain(self.terr, self.agent_population,
                          self.plant_population, self.energy_map)
+        self.disp.draw_info(self.minds, self.mind_names, self.agent_count)
         self.disp.flip()
-        
+
         # test for spacebar pressed - if yes, restart
         for event in pygame.event.get():
             if (event.type == pygame.locals.KEYUP and
                 event.key == pygame.locals.K_SPACE):
                 self.winner = -1
+            if (event.type == pygame.QUIT):
+                sys.exit()
+
 
         self.run_agents()
         self.run_plants()
@@ -325,12 +350,15 @@ try:
     import types
     ObjectMapLayer.get_small_view_fast = types.MethodType(
         cells_helpers.get_small_view_fast, None, ObjectMapLayer)
+    print 'Using cython helpers'
 except ImportError:
+    print 'Not using cython helpers'
+    # TODO: add helpful instructions
     pass
 
 
 class Agent(object):
-    __slots__ = ['x', 'y', 'mind', 'energy', 'alive', 'team', 'loaded', 'color',
+    __slots__ = ['x', 'y', 'mind', 'energy', 'alive', 'team', 'loaded',
                  'act']
     def __init__(self, x, y, team, AgentMind, cargs):
         self.x = x
@@ -340,8 +368,6 @@ class Agent(object):
         self.alive = True
         self.team = team
         self.loaded = False
-        colors = [(255, 0, 0), (0, 0, 255), (255, 0, 255), (255, 255, 0)]
-        self.color = colors[team % len(colors)]
         self.act = self.mind.act
 
     def get_team(self):
@@ -422,10 +448,6 @@ class WorldView(object):
 
 
 class Display(object):
-    black = (0, 0, 0)
-    red = (255, 0, 0)
-    green = (0, 255, 0)
-    yellow = (255, 255, 0)
 
     def __init__(self, size, scale=5):
         self.width, self.height = size
@@ -447,46 +469,38 @@ class Display(object):
             textpos = text.get_rect()
             textpos.topleft = topleft
             self.surface.blit(text, textpos)
-        
+
         self.screen.blit(self.surface, (0,0))
-    
-    def update(self, terr, pop, plants, energy_map):
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                sys.exit()
-        
+
+    def draw_terrain(self, terr, pop, plants, energy_map):
+        plant_color = get_color('green')
         limit = 150 * numpy.ones_like(terr.values)
 
         r = numpy.minimum(limit, 20 * terr.values)
         g = numpy.minimum(limit, 10 * terr.values + 10 * energy_map.values)
         b = numpy.zeros_like(terr.values)
+        #a = numpy.zeros_like(terr.values)
 
         img = numpy.dstack((r, g, b))
 
-        #todo: find out how many teams are playing
-        team_pop = { 0:0, 1:0, 2:0,3:0 } 
-        team_col = { 0:(False,False,False), 1:(False,False,False), 2:(False,False,False), 3:(False,False,False) }
-
-
         for a in pop:
-            img[a.get_pos()] = a.color
-            team_pop[a.get_team()] += 1
-            if(not team_col[a.get_team()] == False):
-                team_col[a.get_team()] = a.color
+            img[a.get_pos()] = get_team_color(a.get_team())
 
         for a in plants:
-            img[a.get_pos()] = self.green
+            img[a.get_pos()] = plant_color
 
         scale = self.scale
         pygame.transform.scale(pygame.surfarray.make_surface(img),
                                self.size, self.screen)
-        drawTop = 0
-        for t in team_pop:
-            drawTop += 20
-            self.show_text(str(team_pop[t]), team_col[t], (10,drawTop))
 
+    def draw_info(self, minds, mind_names, agent_count):
+        y_offset = 0
 
-        
+        for n, m in enumerate(minds):
+            y_offset += 20
+            self.show_text(
+                "%s: %s" % (mind_names[m], agent_count[m]),
+                get_team_color(n), (10, y_offset))
 
     def flip(self):
         pygame.display.flip()
@@ -533,7 +547,7 @@ class Message(object):
 
 def main():
     global bounds, symmetric, mind_list
-    
+
     try:
         config.read('default.cfg')
         bounds = config.getint('terrain', 'bounds')
