@@ -14,6 +14,8 @@ import time
 import numpy
 import pygame, pygame.locals
 
+import collections
+
 if not pygame.font: print 'Warning, fonts disabled'
 
 try:
@@ -87,6 +89,8 @@ class Game(object):
 
         self.agent_map = ObjectMapLayer(self.size)
         self.agent_population = []
+        self.agent_count = collections.defaultdict(int)
+
         self.winner = None
         if symmetric:
             self.n_plants = 7
@@ -233,7 +237,7 @@ class Game(object):
                     #Think twice before attacking 
                     if actions_dict[victim].type == ACT_ATTACK:
                         victim.attack(agent)
-                     
+
             elif action.type == ACT_LIFT:
                 if not agent.loaded and self.terr.get(agent.x, agent.y) > 0:
                     agent.loaded = True
