@@ -10,6 +10,7 @@ import ConfigParser
 import random
 import sys
 import time
+import logging
 
 import numpy
 import pygame, pygame.locals
@@ -648,7 +649,7 @@ def main():
         if len(sys.argv)>2:
             mind_list = [(n,get_mind(n)) for n in sys.argv[1:] ]
     except (ImportError, IndexError):
-        pass
+        logging.exception("error loading minds")
 
 
 if __name__ == "__main__":
